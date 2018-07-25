@@ -179,6 +179,21 @@ class RolloutGenerator(object):
         _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
         return action.squeeze().cpu().numpy(), next_hidden
 
+
+    def recon_error_reward(self, obs, hidden, obs_new):
+        """Find out how good the reconstruction was.
+        Encoding the vae to get mu and the controller action is deterministic, so its fine to be duplicated
+        ??? maybe remove this and the above function because of unnecessary duplication
+        """
+        _, latent_mu, _ = self.vae(obs)
+        action = self.controller(latent_mu, hidden[0])
+
+        mus, sigmas, logpi, r, d, next_hidden = self.mdrnn(action, latent_mu, hidden)
+        recon_x = self.vae.decoder(mus) # ??? this is just mu, right? Still a bit confused
+
+        reward = -1*((recon_x - obs_new) ** 2).mean()
+        
+
     def rollout(self, params, render=False):
         """ Execute a rollout and returns minus cumulative reward.
 
@@ -206,8 +221,14 @@ class RolloutGenerator(object):
         i = 0
         while True:
             obs = transform(obs).unsqueeze(0).to(self.device)
-            action, hidden = self.get_action_and_transition(obs, hidden)
-            obs, reward, done, _ = self.env.step(action)
+            action, hidden_new = self.get_action_and_transition(obs, hidden)
+            obs_new, reward, done, _ = self.env.step(action)
+
+            if self.explorer:
+                reward = self.recon_error_reward(obs, hidden, obs_new)
+
+            hidden = hidden_new
+            obs = obs_new
 
             if render:
                 self.env.render()
