@@ -30,10 +30,9 @@ def train_vae(logdir, traindir, epochs=100, testdir=None):
     nosamples = False #'Does not save samples during training if specified'
 
     testdir = testdir if testdir else traindir
-    cuda = torch.cuda.is_available()
-
+    
     torch.manual_seed(123)
-    device = torch.device("cuda" if cuda else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
     transform_train = transforms.Compose([
