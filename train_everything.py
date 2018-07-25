@@ -54,8 +54,6 @@ all_results['best'] = []
 gen_data(PATH=PATH, method=brown_noise)
 
 
-
-
 for iteration in range(iterations):
 	train_vae(logdir+'/train', logdir, epochs = int(vae_tot_epochs/iterations)) # maybe doing these things twice with two data dirs later
 	train_mdrnn(logdir+'/train', logdir, epochs = int(mdrnn_tot_epochs/iterations))
