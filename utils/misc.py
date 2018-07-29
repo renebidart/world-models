@@ -161,6 +161,8 @@ class RolloutGenerator(object):
         _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
         return action.squeeze().cpu().numpy(), next_hidden
 
+
+
     def rollout(self, params, render=False):
         """ Execute a rollout and returns minus cumulative reward.
 

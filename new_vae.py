@@ -25,6 +25,7 @@ from data.loaders import RolloutObservationDataset
 
 
 def train_vae(logdir, traindir, epochs=100, testdir=None):
+    print('Training VAE using traindir', traindir)
     batch_size = 100 # maybe should change this back to their initial one of 32
     noreload = False #Best model is not reloaded if specified
     nosamples = False #'Does not save samples during training if specified'

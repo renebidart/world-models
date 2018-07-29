@@ -72,6 +72,16 @@ def train_explorer(logdir, epochs=10, n_samples=4, pop_size=4, display=True, max
         sys.stdout = open(join(tmp_dir, str(getpid()) + '.out'), 'a')
         sys.stderr = open(join(tmp_dir, str(getpid()) + '.err'), 'a')
 
+        # with torch.no_grad():
+        #     r_gen = RolloutGenerator(logdir, device, time_limit)
+
+        #     while e_queue.empty():
+        #         if p_queue.empty():
+        #             sleep(.1)
+        #         else:
+        #             s_id, params = p_queue.get()
+        #             r_queue.put((s_id, r_gen.rollout(params)))
+
         with torch.no_grad():
             r_gen = RolloutGenerator(logdir, device, time_limit)
 
@@ -81,6 +91,7 @@ def train_explorer(logdir, epochs=10, n_samples=4, pop_size=4, display=True, max
                 else:
                     s_id, params = p_queue.get()
                     r_queue.put((s_id, r_gen.rollout(params)))
+
 
 
     ################################################################################

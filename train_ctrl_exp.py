@@ -1,13 +1,18 @@
 """
-Training a linear controller on latent + recurrent state
-with CMAES.
+Trains controller and the explorer, based on --explorer.
+Calls the RolloutGenerator, which generates rollouts and the asssociated rewards for either controller or explorer.
+Controller retuurns sum of discounted rewards, explorer returns sum of undiscounted model reconstruction error (see utils.misc)
+
+Trains linear controller and explorer on latent + recurrent state with CMAES.
 
 This is a bit complex. num_workers slave threads are launched
 to process a queue filled with parameters to be evaluated.
+
+Needs to be run using xvfb-run -s "-screen 0 1400x900x24"
 """
 import argparse
 import sys
-from os.path import join, exists
+from os.path import join, exists, isfile
 from os import mkdir, unlink, listdir, getpid
 from time import sleep
 from torch.multiprocessing import Process, Queue
@@ -16,34 +21,50 @@ import cma
 from models import Controller
 from tqdm import tqdm
 import numpy as np
-from utils.misc import RolloutGenerator, ASIZE, RSIZE, LSIZE
-from utils.misc import load_parameters
-from utils.misc import flatten_parameters
+# from utils.misc import RolloutGenerator, ASIZE, RSIZE, LSIZE
+# from utils.misc import load_parameters
+# from utils.misc import flatten_parameters
 
+from utils.explore_misc import RolloutGenerator, ASIZE, RSIZE, LSIZE
+from utils.explore_misc import load_parameters
+from utils.explore_misc import flatten_parameters
+ 
 # parsing
 parser = argparse.ArgumentParser()
 parser.add_argument('--logdir', type=str, help='Where everything is stored.')
-parser.add_argument('--n-samples', type=int, help='Number of samples used to obtain '
-                    'return estimate.')
-parser.add_argument('--pop-size', type=int, help='Population size.')
+parser.add_argument('--n-samples', type=int, help='Number of samples used to obtain return estimate.',
+                    default=4)
+parser.add_argument('--pop-size', type=int, help='Population size.',
+                    default=4)
 parser.add_argument('--target-return', type=float, help='Stops once the return '
-                    'gets above target_return')
+                    'gets above target_return', default=None)
 parser.add_argument('--display', action='store_true', help="Use progress bars if "
                     "specified.")
 parser.add_argument('--max-workers', type=int, help='Maximum number of workers.',
-                    default=32)
+                    default=10)
 parser.add_argument('--iteration', type=int, help='counter to keep track of where results are saved',
                     default=0)
+parser.add_argument('--explore', action='store_true', help="If specified, use Reconstruction error and store models in exp.")
+parser.add_argument('--max-epochs', type=int, help='Max epochs to train. Used instead of target-return to train explorer',
+                    default=None)
 args = parser.parse_args()
 
 
 iteration = str(args.iteration)
+
 # multiprocessing variables
 n_samples = args.n_samples
 pop_size = args.pop_size
 num_workers = min(args.max_workers, n_samples * pop_size)
+
 time_limit = 1000
 
+folder_name = 'ctrl'
+if args.explore:
+    folder_name =  'exp'
+print('ctrl folder_name: ', folder_name)
+
+# ??? what is this used for and does it matter that we delete it every time?
 # create tmp dir if non existent and clean it if existent
 tmp_dir = join(args.logdir, 'tmp')
 if not exists(tmp_dir):
@@ -52,15 +73,21 @@ else:
     for fname in listdir(tmp_dir):
         unlink(join(tmp_dir, fname))
 
-# create ctrl dir if non exitent
-ctrl_dir = join(args.logdir, 'ctrl')
+# create ctrl dir if non exitent. Either is 'ctrl' or 'exp'
+ctrl_dir = join(args.logdir, folder_name)
 if not exists(ctrl_dir):
     mkdir(ctrl_dir)
 
 
-# ???
-results={}
-results['best'] = []
+results_loc = args.logdir +'/controller_perf_target_'+str(folder_name)+'.npy'
+
+if not isfile(results_loc):
+    print(f'Iteration {iteration}, making new results file')
+    results={}
+    results['best'] = []
+else:
+    print(f'Iteration {iteration}, loading results')
+    results = np.load(results_loc)
 
 
 ################################################################################
@@ -90,14 +117,14 @@ def slave_routine(p_queue, r_queue, e_queue, p_index):
     """
     # init routine
     gpu = p_index % torch.cuda.device_count()
-    device = torch.device('cuda:{}'.format(gpu) if torch.cuda.is_available() else 'cpu')
+    device = device="cuda:0" #torch.device('cuda:{}'.format(gpu) if torch.cuda.is_available() else 'cpu')
 
     # redirect streams
-    sys.stdout = open(join(tmp_dir, str(getpid()) + '.out'), 'a')
-    sys.stderr = open(join(tmp_dir, str(getpid()) + '.err'), 'a')
+    # sys.stdout = open(join(tmp_dir, str(getpid()) + '.out'), 'a')
+    # sys.stderr = open(join(tmp_dir, str(getpid()) + '.err'), 'a')
 
     with torch.no_grad():
-        r_gen = RolloutGenerator(args.logdir, device, time_limit)
+        r_gen = RolloutGenerator(args.logdir, device, time_limit, args.explore)
 
         while e_queue.empty():
             if p_queue.empty():
@@ -156,6 +183,7 @@ controller = Controller(LSIZE, RSIZE, ASIZE)  # dummy instance
 cur_best = None
 ctrl_file = join(ctrl_dir, 'best.tar')
 print("Attempting to load previous best...")
+
 if exists(ctrl_file):
     state = torch.load(ctrl_file, map_location={'cuda:0': 'cpu'})
     cur_best = - state['reward']
@@ -169,12 +197,15 @@ es = cma.CMAEvolutionStrategy(flatten_parameters(parameters), 0.1,
 epoch = 0
 log_step = 3
 while not es.stop():
-    if cur_best is not None and - cur_best > args.target_return:
-        print("Already better than target, breaking...")
-        break
+    print('Starting epoch: ', epoch)
+    if args.target_return:
+        if cur_best is not None and - cur_best > args.target_return:
+            print("Already better than target, breaking...")
+            break
 
     r_list = [0] * pop_size  # result list
     solutions = es.ask()
+
 
     # push parameters to queue
     for s_id, s in enumerate(solutions):
@@ -204,7 +235,7 @@ while not es.stop():
         ###  ??? log the best
         results['best'].append(best)
 
-        print("Current evaluation: {}".format(best))
+        print(f"Epoch: {epoch}, Current evaluation best: {best}, std_best: {std_best}")
         if not cur_best or cur_best > best:
             cur_best = best
             print("Saving new best with value {}+-{}...".format(-cur_best, std_best))
@@ -214,12 +245,18 @@ while not es.stop():
                  'reward': - cur_best,
                  'state_dict': controller.state_dict()},
                 join(ctrl_dir, 'best.tar'))
-        if - best > args.target_return:
-            print("Terminating controller training with value {}...".format(best))
-            break
+
+        # if args.max_epochs specified, stop base on this
+        if args.max_epochs:
+            if epoch > int(args.max_epochs):
+                break
+        elif args.target_return:
+            if - best > args.target_return:
+                print("Terminating controller training with value {}...".format(best))
+                break
     epoch += 1
 
-np.save(args.logdir +'/controller_perf_'+'target_'+str(args.target_return)+'_iter_'+str(iteration)+'.npy', results)
+np.save(args.logdir +'/controller_perf_target_'+str(folder_name)+'.npy', results)
 
 es.result_pretty()
 e_queue.put('EOP')
