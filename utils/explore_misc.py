@@ -230,18 +230,6 @@ class RolloutGenerator(object):
         :returns: dictionary of losses, containing the gmm, the mse, the bce and
             the averaged loss.
         """
-        # latent_obs = latent_obs.transpose(1, 0).to(self.device)
-        # action = action.transpose(1, 0).to(self.device)
-        # reward = reward.transpose(1, 0)
-        # terminal = terminal.transpose(1, 0)
-        # latent_next_obs = latent_next_obs.transpose(1, 0).to(self.device).squeeze().unsqueeze(0)
-
-        # latent_obs, action,\
-        #     reward, terminal,\
-        #     latent_next_obs = [arr.transpose(1, 0)
-        #                        for arr in [latent_obs, action,
-        #                                    reward, terminal,
-        #                                    latent_next_obs]]
 
         mus, sigmas, logpi, rs, ds, next_hidden = self.mdrnn(action, latent_obs, hidden)
         gmm = gmm_loss(latent_next_obs, mus, sigmas, logpi)
@@ -249,28 +237,6 @@ class RolloutGenerator(object):
         mse = f.mse_loss(rs, reward)
         loss = (gmm + mse) / (LSIZE + 2)
         return loss.squeeze().cpu().numpy()
-
-########$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-
-    # def get_action_and_transition(self, obs, hidden):
-    #     """ Get action and transition.
-
-    #     Encode obs to latent using the VAE, then obtain estimation for next
-    #     latent and next hidden state using the MDRNN and compute the controller
-    #     corresponding action.
-
-    #     :args obs: current observation (1 x 3 x 64 x 64) torch tensor
-    #     :args hidden: current hidden state (1 x 256) torch tensor
-
-    #     :returns: (action, next_hidden)
-    #         - action: 1D np array
-    #         - next_hidden (1 x 256) torch tensor
-    #     """
-    #     _, latent_mu, _ = self.vae(obs)
-    #     action = self.controller(latent_mu, hidden[0])
-    #     _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
-    #     return action.squeeze().cpu().numpy(), next_hidden
-
 
     # def recon_error_reward(self, obs, hidden, obs_new):
     #     print('recon_error_reward')
@@ -356,3 +322,55 @@ class RolloutGenerator(object):
             if done or i > self.time_limit:
                 return - cumulative
             i += 1
+
+
+
+class RolloutGeneratorSingle(object):
+    def __init__(self, mdir, device, controller_model):
+        """ Run one step. 
+        Load VAE and MDRNN from files
+        Take the controller (exp/ctrl) an an input, so we can easily change stuff inside the other file.
+         """
+        self.controller = controller_model.to(device)
+
+        # Load controllers
+        vae_file, rnn_file, ctrl_file = \
+            [join(mdir, m, 'best.tar') for m in ['vae', 'mdrnn', 'ctrl']]
+
+        assert exists(vae_file) and exists(rnn_file),\
+            "Either vae or mdrnn is untrained."
+
+        vae_state, rnn_state = [
+            torch.load(fname, map_location={'cuda:0': str(device)})
+            for fname in (vae_file, rnn_file)]
+
+        for m, s in (('VAE', vae_state), ('MDRNN', rnn_state)):
+            print("Loading {} at epoch {} "
+                  "with test loss {}".format(
+                      m, s['epoch'], s['precision']))
+
+        self.vae = VAE(3, LSIZE).to(device)
+        self.vae.load_state_dict(vae_state['state_dict'])
+
+
+        # MDRNNCell
+        self.mdrnn = MDRNNCell(LSIZE, ASIZE, RSIZE, 5).to(device)
+        self.mdrnn.load_state_dict(
+            {k.strip('_l0'): v for k, v in rnn_state['state_dict'].items()})
+
+
+    def single_step(obs, hidden):
+        if params is not None:
+            load_parameters(params, self.controller)
+
+        obs = transform(obs).unsqueeze(0).to(self.device)
+
+        # GET ACTION
+        _, latent_mu, _ = self.vae(obs)
+        action = self.controller(latent_mu, hidden[0])
+        _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
+        action = action.squeeze().cpu().numpy()
+
+        return action, next_obs, next_hidden
+
+

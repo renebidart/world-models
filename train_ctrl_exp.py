@@ -12,6 +12,7 @@ Needs to be run using xvfb-run -s "-screen 0 1400x900x24"
 """
 import argparse
 import sys
+import pickle
 from os.path import join, exists, isfile
 from os import mkdir, unlink, listdir, getpid
 from time import sleep
@@ -79,16 +80,19 @@ if not exists(ctrl_dir):
     mkdir(ctrl_dir)
 
 
-results_loc = args.logdir +'/controller_perf_target_'+str(folder_name)+'.npy'
+results_loc = args.logdir +'/controller_perf_target_'+str(folder_name)+'.pkl'
 
 if not isfile(results_loc):
     print(f'Iteration {iteration}, making new results file')
     results={}
+    results['epoch'] = []
     results['best'] = []
+    results['best_params'] = []
+    results['std_best'] = []
+
 else:
     print(f'Iteration {iteration}, loading results')
-    results = np.load(results_loc)
-
+    results = pickle.load( open( results_loc, "rb" ) )
 
 ################################################################################
 #                           Thread routines                                    #
@@ -233,7 +237,10 @@ while not es.stop():
         best_params, best, std_best = evaluate(solutions, r_list)
 
         ###  ??? log the best
-        results['best'].append(best)
+        results['epoch'].extend([epoch])
+        results['best'].extend([best])
+        results['best_params'].extend([best_params])
+        results['std_best'].extend([std_best])
 
         print(f"Epoch: {epoch}, Current evaluation best: {best}, std_best: {std_best}")
         if not cur_best or cur_best > best:
@@ -249,14 +256,18 @@ while not es.stop():
         # if args.max_epochs specified, stop base on this
         if args.max_epochs:
             if epoch > int(args.max_epochs):
+                print('MAX EPOCHS REACHED')
                 break
         elif args.target_return:
             if - best > args.target_return:
+                print('HIT TARGET RETURN')
                 print("Terminating controller training with value {}...".format(best))
                 break
     epoch += 1
 
-np.save(args.logdir +'/controller_perf_target_'+str(folder_name)+'.npy', results)
+
+with open(results_loc, 'wb') as outfile:
+    pickle.dump(results, outfile, protocol=pickle.HIGHEST_PROTOCOL)
 
 es.result_pretty()
 e_queue.put('EOP')
